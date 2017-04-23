@@ -1,0 +1,69 @@
+#!/bin/bash
+
+# Exit on command errors and treat unset variables as an error
+set -eu
+
+app=$YNH_APP_INSTANCE_NAME
+
+# Retrieve arguments
+domain=$YNH_APP_ARG_DOMAIN
+path=$YNH_APP_ARG_PATH
+admin=$YNH_APP_ARG_ADMIN
+is_public=$YNH_APP_ARG_IS_PUBLIC
+language=$YNH_APP_ARG_LANGUAGE
+
+
+MINECRAFT_VERSION="1.11.2"
+MINECRAFT_SOURCE_URL="https://s3.amazonaws.com/Minecraft.Download/versions/${MINECRAFT_VERSION}/minecraft_server.${MINECRAFT_VERSION}.jar
+
+
+# Source YunoHost helpers
+source /usr/share/yunohost/helpers
+
+# Load common variables
+#source ./_common.sh
+
+# Save app settings
+ynh_app_setting_set "$app" admin "$admin"
+ynh_app_setting_set "$app" is_public "$is_public"
+ynh_app_setting_set "$app" language "$language"
+
+# Check domain/path availability
+sudo yunohost app checkurl "${domain}${path}" -a "$app" \
+    || ynh_die "Path not available: ${domain}${path}"
+
+# Check user parameter
+ynh_user_exists "$admin" \
+  || ynh_die "The chosen admin user does not exist."
+ynh_app_setting_set $app admin_user $admin
+
+# Copy source files
+final_path=/var/www/$app
+sudo mkdir -p $final_path
+sudo cp -a ../sources/. $final_path
+
+# Set permissions to app files
+# you may need to make some file and/or directory writeable by www-data (nginx user)
+sudo chown -R root: $final_path
+
+# Dependencies
+sudo apt-get install -y default-jdk
+  || ynh_die "Unable to install dependencies"
+
+# Download jar server
+wget -q -O "$final_path/minecraft.jar" ${MINECRAFT_SOURCE_URL} \
+  || ynh_die "Unable to download source jar"
+
+# Modify Nginx configuration file and copy it to Nginx conf directory
+nginx_conf=../conf/nginx.conf
+sed -i "s@YNH_WWW_PATH@$path@g" $nginx_conf
+sed -i "s@YNH_WWW_ALIAS@$final_path/@g" $nginx_conf
+sudo cp $nginx_conf /etc/nginx/conf.d/$domain.d/$app.conf
+
+# If app is public, add url to SSOWat conf as skipped_uris
+if [[ $is_public -eq 1 ]]; then
+  ynh_app_setting_set "$app" unprotected_uris "/"
+fi
+
+# Reload services
+sudo service nginx reload
